@@ -11,6 +11,7 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.PrintWriter;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -35,6 +36,7 @@ import opennlp.tools.tokenize.TokenizerModel;
 import opennlp.tools.util.InvalidFormatException;
 import structures.LanguageModel;
 import structures.Post;
+import structures.PostHashDoubleComparator;
 import structures.StringHashDoubleComparator;
 import structures.Token;
 
@@ -53,8 +55,14 @@ public class DocAnalyzer {
 	HashMap<String, Integer> m_negUni; //unigrams in negative docs
 	HashMap<String, Double> m_infGain; //information gain
 	HashMap<String, Double> m_chiSq; //chi square
-	
-	
+	HashMap<String, Token> m_uniPosCorpusModel = new HashMap<String, Token>();
+	HashMap<String, Token> m_uniNegCorpusModel = new HashMap<String, Token>();
+	int m_uniPosTot;
+	int m_uniNegTot;
+	HashMap<String, Double> m_logRatio;
+	double m_delta;
+	ArrayList<Post> m_corpus;
+	HashMap<Post, Double> fx;
 	
 	
 	
@@ -109,6 +117,13 @@ public class DocAnalyzer {
 		m_negUni = new HashMap<String, Integer>();
 		m_infGain = new HashMap<String, Double>();
 		m_chiSq = new HashMap<String, Double>();
+		m_uniPosCorpusModel = new HashMap<String, Token>();
+		m_uniNegCorpusModel = new HashMap<String, Token>();
+		m_uniPosTot =0;
+		m_uniNegTot =0;
+		m_logRatio = new HashMap<String, Double>();
+		m_delta =0.1;
+		m_corpus = new ArrayList<Post>();
 		
 		
 		
@@ -451,7 +466,7 @@ public class DocAnalyzer {
 					}
 					
 				}
-				review.setTokens(tokens);
+				review.setTokens(docTokens.toArray(new String[docTokens.size()]));
 				//System.out.println(m_tf.keySet());
 				//System.out.println(review.getTokens().length);
 				m_reviews.add(review);
@@ -501,7 +516,7 @@ public class DocAnalyzer {
 		}
 	}
 
-	public void computeInformationGain() {
+	public HashSet<String> computeInformationGain() {
 		System.out.println(m_NP +" "+ m_NN);
 		double ppos = (double)m_NP/(double)(m_NN+m_NP);
 		double pneg = (double)m_NN/(double)(m_NN+m_NP);
@@ -553,14 +568,20 @@ public class DocAnalyzer {
 		}
 		List<Entry<String, Double>> entryList = new ArrayList<Entry<String, Double>>(m_infGain.entrySet());
 		Collections.sort(entryList,new StringHashDoubleComparator());
-		System.out.println(m_infGain.size());
+		System.out.println("\nSize of IG: "+ m_infGain.size());
 		System.out.println("\nTop 20 words from Information Gain: ");
 		for (int i=0; i<20;i++) {
 			System.out.println(entryList.get(i));
 		}
+		HashSet<String> returnSet = new HashSet<String>();
+		for (int i=0; i<5000 && i<entryList.size();i++) {
+			returnSet.add(entryList.get(i).getKey());
+		}
+		System.out.println("\nIG return set: "+returnSet.size());
+		return returnSet;
 	}
 	
-	public void computeChiSquare() {
+	public HashSet<String> computeChiSquare() {
 		for (String S : m_df.keySet()) {
 			if(m_df.get(S)>=10) {
 				double A = 0.0;
@@ -583,14 +604,196 @@ public class DocAnalyzer {
 		}
 		List<Entry<String, Double>> entryList = new ArrayList<Entry<String, Double>>(m_chiSq.entrySet());
 		Collections.sort(entryList,new StringHashDoubleComparator());
-		System.out.println(m_chiSq.size());
+		System.out.println("\nSize of chi Square: "+m_chiSq.size());
 		System.out.println("\nTop 20 words from chi Square: ");
 		for (int i=0; i<20;i++) {
 			System.out.println(entryList.get(i));
 		}
+		HashSet<String> returnSet = new HashSet<String>();
+		for (int i=0; i<5000 && i<entryList.size();i++) {
+			returnSet.add(entryList.get(i).getKey());
+		}
+		System.out.println("\nIG return set: "+returnSet.size());
+		return returnSet;
 	}
 
+	public void computeControlledVocabularyAndCorpus() {
+		m_vocabulary = new HashSet<String>();
+		System.out.println("\nbefore: "+m_vocabulary.size());
+		m_vocabulary.addAll(computeInformationGain());
+		System.out.println("\nmid: "+m_vocabulary.size());
+		m_vocabulary.addAll(computeChiSquare());
+		System.out.println("\nafter: "+m_vocabulary.size());
+		System.out.println("\nSize of vacab: "+m_vocabulary.size());
+		m_NP = 0;
+		m_NN = 0;
+		for (Post review: m_reviews) {
+			HashSet<String> docTokens = new HashSet<String>(Arrays.asList(review.getTokens()));
+			HashSet<String> toks = new HashSet<String>();
+			docTokens.retainAll(m_vocabulary);
+			if (docTokens.size() > 5) {
+				String[] tokens = Tokenize(review.getContent());
+				if (review.getRating()<4) {
+					m_NN += 1;
+					for (int j =0; j < tokens.length; j++)
+					{
+						String word = tokens[j];
+						word = SnowballStemming(Normalization(word));
+						if (!word.isEmpty() && m_vocabulary.contains(word)) {
+							if (!toks.contains(word))
+							{
+								toks.add(word);
+							}
+							m_uniNegTot +=1;
+							m_unitot +=1;
+							if (m_uniNegCorpusModel.containsKey(word)) {
+								m_uniNegCorpusModel.get(word).setID(m_uniNegCorpusModel.get(word).getID()+1);
+								//m_unistats.put(word, m_utf.get(word)+1);
+							}
+							else {
+								Token tok = new Token(word);
+								tok.setID(1);
+								m_uniNegCorpusModel.put(word, tok);
+								//m_unistats.put(word,1);
+							}	
+						}
+					
+					}
+				}
+				else {
+					m_NP += 1;
+					for (int j =0; j < tokens.length; j++)
+					{
+						String word = tokens[j];
+						word = SnowballStemming(Normalization(word));
+						if (!word.isEmpty() && m_vocabulary.contains(word)) {
+							if (!toks.contains(word))
+							{
+								toks.add(word);
+							}
+							m_uniPosTot +=1;
+							m_unitot +=1;
+							if (m_uniPosCorpusModel.containsKey(word)) {
+								m_uniPosCorpusModel.get(word).setID(m_uniPosCorpusModel.get(word).getID()+1);
+								//m_unistats.put(word, m_utf.get(word)+1);
+							}
+							else {
+								Token tok = new Token(word);
+								tok.setID(1);
+								m_uniPosCorpusModel.put(word, tok);
+								//m_unistats.put(word,1);
+							}	
+						}
+					
+					}
+				}
+				review.setTokens(toks.toArray(new String[toks.size()]));
+				m_corpus.add(review);
+			}
+			
+		}
+		for(String S: m_vocabulary) {
+			double pwp = 0.0;
+			double pw = 0.0;
+			if (m_uniPosCorpusModel.containsKey(S)) {
+				pw = (double)(m_uniPosCorpusModel.get(S).getID());
+				pwp = (pw + m_delta)/(m_uniPosTot+(m_vocabulary.size() * m_delta));
+				m_uniPosCorpusModel.get(S).setValue(pwp);
+			}
+			else {
+				pwp = (pw + m_delta)/(m_uniPosTot+(m_vocabulary.size() * m_delta));
+				Token tok = new Token(S);
+				tok.setValue(pwp);
+				m_uniPosCorpusModel.put(S, tok);
+			}
+			
+			double nwp = 0.0;
+			double nw =0.0;
+			if (m_uniNegCorpusModel.containsKey(S)) {
+				nw = (double)(m_uniNegCorpusModel.get(S).getID());
+				nwp = (nw + m_delta)/(m_uniNegTot+(m_vocabulary.size() * m_delta));
+				m_uniNegCorpusModel.get(S).setValue(nwp);
+			}		
+			else {
+				nwp = (nw + m_delta)/(m_uniNegTot+(m_vocabulary.size() * m_delta));
+				Token tok = new Token(S);
+				tok.setValue(nwp);
+				m_uniNegCorpusModel.put(S, tok);
+			}
+			
+			double lr = Math.log(pwp/nwp);
+			m_logRatio.put(S, lr);
+		}
+		List<Entry<String, Double>> entryList = new ArrayList<Entry<String, Double>>(m_logRatio.entrySet());
+		Collections.sort(entryList,new StringHashDoubleComparator());
+		System.out.println("\nSize of log ratio: "+m_logRatio.size());
+		System.out.println("\nTop 20 words from log ratio: ");
+		for (int i=0; i<20;i++) {
+			System.out.println(entryList.get(i));
+		}
+		System.out.println("\nBottom 20 words from log ratio: ");
+		for (int i=m_logRatio.size()-1; i>(m_logRatio.size()-21);i--) {
+			System.out.println(entryList.get(i));
+		}
+	}
 	
+	public double NaiveBayesLinearClassification(Post review) {
+		//System.out.println(m_NP +" "+ m_NN);
+		double ppos = (double)m_NP/(double)(m_NN+m_NP);
+		double pneg = (double)m_NN/(double)(m_NN+m_NP);
+		double summation = Math.log(ppos/pneg);
+		for (String S: review.getTokens()) {
+			summation += Math.log(m_uniPosCorpusModel.get(S).getValue()) - Math.log(m_uniNegCorpusModel.get(S).getValue());
+		}
+		return summation;
+	}
+	public void computePrecisionRecallCurve() {
+		PrintWriter pw = null;
+		try {
+		    pw = new PrintWriter(new File("./Data/percisionRecall.csv"));
+		} catch (FileNotFoundException e) {
+		    e.printStackTrace();
+		}
+		StringBuilder builder = new StringBuilder();
+		String ColumnNamesList = "fx,recall,precision";
+		// No need give the headers Like: id, Name on builder.append
+		builder.append(ColumnNamesList +"\n");
+		fx = new HashMap<Post, Double>();
+		for (Post review: m_corpus) {
+			fx.put(review, NaiveBayesLinearClassification(review)) ;
+		}
+		List<Entry<Post, Double>> entryList = new ArrayList<Entry<Post, Double>>(fx.entrySet());
+		Collections.sort(entryList,new PostHashDoubleComparator());
+		//Arrays.sort(fx,comparator.reversed());
+		for (int j=0;j<fx.size();j++) {
+			double threshold = entryList.get(j).getValue();
+			int TP=0;
+			int TN=0;
+			int FP=0;
+			int FN=0;
+			for (int k=0;k<fx.size();k++) {
+				double curfx = entryList.get(k).getValue();
+				double rating = entryList.get(k).getKey().getRating();
+				int groundTruth = 1;
+				int pred = 1;
+				if (rating <4) groundTruth = 0;
+				if (curfx<threshold) pred = 0;
+				if (groundTruth == pred) {
+					if (groundTruth == 0) TN += 1;
+					else TP += 1;
+				}
+				else {
+					if (groundTruth == 0) FP += 1;
+					else FN += 1;
+				}
+			}
+			double precision = (double)(TP)/(double)(TP+FP);
+			double recall = (double)(TP)/(double)(TP+FN);
+			builder.append(threshold+","+recall+","+precision+"\n");
+		}
+		pw.write(builder.toString());
+		pw.close();
+	}
 	public void computeControlledVocabulary() {
 		m_ndf=sortByValues(m_df);
 		PrintWriter pw = null;
@@ -883,10 +1086,6 @@ public class DocAnalyzer {
 		}
 		size = m_reviews.size() - size;
 		System.out.println("Loading " + m_N + " review train documents from " + folder);
-		//System.out.println("token size: "+ m_tf.size());
-		//System.out.println("total review : "+m_reviews );
-		computeControlledVocabulary();
-		computeIdf();
 	}
 	
 	// sample code for demonstrating how to recursively load files in a directory 
@@ -1008,15 +1207,16 @@ public class DocAnalyzer {
 		for(String token:m_tokenizer.tokenize(text)){
 			System.out.format("%s\t%s\t%s\t%s\n", token, Normalization(token), SnowballStemming(token), PorterStemming(token));
 		}	
-		
 	}
 	
 	public static void main(String[] args) throws InvalidFormatException, FileNotFoundException, IOException {		
 		DocAnalyzer analyzer = new DocAnalyzer("./data/Model/en-token.bin", 2);
 		analyzer.LoadStopwords("./Data/stopwords.txt");
 		analyzer.LoadDirectory("./Data/yelp/train1", ".json");
-		analyzer.computeInformationGain();
-		analyzer.computeChiSquare();
+		analyzer.computeControlledVocabularyAndCorpus();
+		analyzer.computePrecisionRecallCurve();
+		//analyzer.computeInformationGain();
+		//analyzer.computeChiSquare();
 		//code for demonstrating tokenization and stemming
 		//analyzer.TokenizerDemon("hi i am sofia I am a good person.");
 		//String res = ("the number is 22.5 22").replaceAll("\\d+[.]\\d+|\\d+", "NUM");
